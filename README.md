@@ -91,4 +91,4 @@ cp brightness brightness-indicator ~/.local/bin/
 
 ## License
 
-MIT — do whatever you want.
+GNU GPLv3 — anyone who modifies and distributes this must keep it open source.
