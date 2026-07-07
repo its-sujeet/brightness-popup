@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Brightness control — popup slider with gamma curve.
-Toggle: if already shown, bring to front or close+reopen.
-Super+B → slider → presets → Escape to close.
+Brightness control — gamma-corrected popup with extended dark range.
+Slider goes -40 (barely glowing) to 100 (full). Negative values = slow 
+gradual descent into dark, step by step.
+Toggle on/off with Super+B.
 """
 
 import os
 import signal
 import sys
-import struct
 import fcntl
 import gi
 
@@ -18,18 +18,25 @@ from gi.repository import Gtk, GLib, Gdk
 LOCK_FILE = "/tmp/brightness-popup.lock"
 BRIGHTNESS_FILE = "/sys/class/backlight/intel_backlight/brightness"
 MAX_HARDWARE = 19200
-GAMMA = 0.55
+SLIDER_MIN = -40
+SLIDER_MAX = 100
+GAMMA = 2.2  # steeper curve spreads the low end wider
 
 
-def hardware_from_pct(pct: float) -> int:
-    return int(MAX_HARDWARE * ((pct / 100.0) ** GAMMA))
+def hardware_from_slider(s: float) -> int:
+    """Map slider value (-40..100) → hardware (0..MAX)."""
+    t = (s - SLIDER_MIN) / (SLIDER_MAX - SLIDER_MIN)  # 0..1
+    t = max(0.0, min(1.0, t))
+    return int(MAX_HARDWARE * (t ** GAMMA))
 
 
-def pct_from_hardware(val: int) -> float:
-    ratio = val / MAX_HARDWARE
+def slider_from_hardware(hw: int) -> float:
+    """Inverse: hardware → slider value."""
+    ratio = max(0.0, min(1.0, hw / MAX_HARDWARE))
     if ratio <= 0:
-        return 0.0
-    return (ratio ** (1.0 / GAMMA)) * 100.0
+        return float(SLIDER_MIN)
+    t = ratio ** (1.0 / GAMMA)
+    return SLIDER_MIN + t * (SLIDER_MAX - SLIDER_MIN)
 
 
 def read_hardware() -> int:
@@ -49,27 +56,29 @@ def write_hardware(val: int) -> None:
         print(f"brightness: write failed — {e}", file=sys.stderr)
 
 
-def acquire_lock() -> bool:
-    """Try to acquire lock file. Returns True if we got it (first instance)."""
+def display_value(s: float) -> str:
+    """Format slider value for the label: -40 → '-40' etc."""
+    n = round(s)
+    if n >= 0:
+        return str(n)
+    return str(n)  # Gtk scale already shows negative
+
+
+def acquire_lock() -> int | None:
     try:
         fd = os.open(LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o644)
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        # Store our PID in the lock file
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.ftruncate(fd, 0)
         os.write(fd, f"{os.getpid()}\n".encode())
-        return True
+        os.fsync(fd)
+        return None
     except (IOError, OSError):
-        # Couldn't lock — another instance is running
-        return False
-
-
-def signal_existing() -> None:
-    """Signal the running instance to toggle visibility."""
-    try:
-        with open(LOCK_FILE) as f:
-            pid = int(f.read().strip().split("\n")[0])
-        os.kill(pid, signal.SIGUSR1)
-    except (FileNotFoundError, ValueError, ProcessLookupError, OSError):
-        pass
+        try:
+            with open(LOCK_FILE) as f:
+                return int(f.read().strip().split("\n")[0])
+        except (FileNotFoundError, ValueError, OSError):
+            return None
 
 
 class BrightnessPopup:
@@ -77,7 +86,7 @@ class BrightnessPopup:
         self.window = Gtk.Window(title="Brightness")
         self.window.set_type_hint(Gdk.WindowTypeHint.UTILITY)
         self.window.set_position(Gtk.WindowPosition.MOUSE)
-        self.window.set_default_size(300, 90)
+        self.window.set_default_size(320, 110)
         self.window.set_resizable(False)
         self.window.set_keep_above(True)
         self.window.set_skip_taskbar_hint(True)
@@ -85,40 +94,41 @@ class BrightnessPopup:
         self.window.set_decorated(False)
 
         self.window.connect("key-press-event", self._on_key)
-        self.window.connect("delete-event", self._on_close)
+        self.window.connect("delete-event", lambda *a: Gtk.main_quit())
 
         # dark theme
         css = Gtk.CssProvider()
         css.load_from_data(b"""
-            window { background: #1a1a1a; }
-            label { color: #ddd; font-size: 11pt; }
+            window { background: #111; }
+            label { color: #ccc; font-size: 11pt; }
             scale slider {
-                background: #ddd;
+                background: #ccc;
                 border-radius: 10px;
                 min-width: 18px;
                 min-height: 18px;
             }
-            scale trough { min-height: 6px; background: #333; border-radius: 3px; }
-            scale fill  { background: #666; border-radius: 3px; }
+            scale trough { min-height: 6px; background: #222; border-radius: 3px; }
+            scale fill  { background: #555; border-radius: 3px; }
             button {
-                background: #2a2a2a;
-                color: #ccc;
-                border: 1px solid #444;
+                background: #222;
+                color: #bbb;
+                border: 1px solid #333;
                 border-radius: 4px;
                 font-size: 10pt;
             }
-            button:hover { background: #3a3a3a; }
+            button:hover { background: #333; }
         """)
         Gtk.StyleContext.add_provider_for_screen(
             Gdk.Screen.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
 
-        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        vbox.set_margin_start(12)
-        vbox.set_margin_end(12)
-        vbox.set_margin_top(10)
-        vbox.set_margin_bottom(10)
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        vbox.set_margin_start(14)
+        vbox.set_margin_end(14)
+        vbox.set_margin_top(12)
+        vbox.set_margin_bottom(12)
 
+        # ── top row: icon + value ──────────────────────────────────
         top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         icon = Gtk.Image.new_from_icon_name(
             "display-brightness-symbolic", Gtk.IconSize.BUTTON
@@ -126,90 +136,81 @@ class BrightnessPopup:
         top.pack_start(icon, False, False, 0)
 
         cur_hw = read_hardware()
-        cur_pct = pct_from_hardware(cur_hw)
-        self.label = Gtk.Label(label=f"Brightness  {round(cur_pct)}%")
+        cur_s = slider_from_hardware(cur_hw)
+        self.label = Gtk.Label(label=f"Brightness  {round(cur_s)}")
         top.pack_start(self.label, True, True, 0)
         vbox.pack_start(top, False, False, 0)
 
+        # ── slider ─────────────────────────────────────────────────
         self.slider = Gtk.Scale.new_with_range(
-            Gtk.Orientation.HORIZONTAL, 0, 100, 1
+            Gtk.Orientation.HORIZONTAL, SLIDER_MIN, SLIDER_MAX, 1
         )
-        self.slider.set_size_request(260, -1)
-        self.slider.set_value(cur_pct)
+        self.slider.set_size_request(280, -1)
+        self.slider.set_value(cur_s)
         self.slider.connect("value-changed", self._on_slider)
         vbox.pack_start(self.slider, True, True, 0)
 
-        preset_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        # ── presets ─────────────────────────────────────────────────
+        preset_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
         preset_box.set_halign(Gtk.Align.CENTER)
         preset_box.set_margin_top(4)
-        for pct_label, pct_val in [
-            ("10%", 10), ("25%", 25), ("50%", 50),
-            ("75%", 75), ("100%", 100),
+        for label, val in [
+            ("-30", -30), ("-20", -20), ("-10", -10),
+            ("0", 0), ("25", 25), ("50", 50), ("75", 75), ("100", 100),
         ]:
-            btn = Gtk.Button(label=pct_label)
-            btn.set_size_request(48, 24)
-            btn.connect("clicked", lambda _, v=pct_val: self._set_pct(v))
+            btn = Gtk.Button(label=label)
+            btn.set_size_request(32, 22)
+            btn.connect("clicked", lambda _, v=val: self._set(v))
             preset_box.pack_start(btn, False, False, 0)
         vbox.pack_start(preset_box, False, False, 0)
 
-        hint = Gtk.Label(label="Esc to close")
-        hint.set_opacity(0.4)
-        hint.set_margin_top(4)
+        # ── hint ────────────────────────────────────────────────────
+        hint = Gtk.Label(label="Esc to close  ·  Super+B toggles")
+        hint.set_opacity(0.35)
+        hint.set_margin_top(2)
         vbox.pack_start(hint, False, False, 0)
 
         self.window.add(vbox)
         self.window.show_all()
         self.window.present_with_time(Gdk.CURRENT_TIME)
 
-        # auto-close timer
-        self._timer_id = GLib.timeout_add_seconds(15, self._hide_on_timeout)
-
-        # listen for SIGUSR1 → toggle close
-        GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGUSR1, self._on_toggle, None)
+        # auto-close
+        GLib.timeout_add_seconds(20, Gtk.main_quit)
 
     def _on_slider(self, slider):
-        pct = slider.get_value()
-        hw = hardware_from_pct(pct)
+        s = slider.get_value()
+        hw = hardware_from_slider(s)
         write_hardware(hw)
-        self.label.set_text(f"Brightness  {round(pct)}%")
+        self.label.set_text(f"Brightness  {round(s)}")
 
-    def _set_pct(self, pct):
-        hw = hardware_from_pct(pct)
+    def _set(self, val):
+        hw = hardware_from_slider(val)
         write_hardware(hw)
-        self.slider.set_value(pct)
+        self.slider.set_value(val)
 
     def _on_key(self, win, event):
         if event.keyval == Gdk.KEY_Escape:
             Gtk.main_quit()
         return False
 
-    def _on_close(self, *args):
-        Gtk.main_quit()
-        return True
-
-    def _hide_on_timeout(self) -> bool:
-        Gtk.main_quit()
-        return False
-
-    def _on_toggle(self, *args) -> bool:
-        """SIGUSR1 received — another Super+B press, toggle close."""
-        Gtk.main_quit()
-        return True
-
 
 if __name__ == "__main__":
-    signal.signal(signal.SIGUSR1, signal.SIG_IGN)  # default handler
+    existing_pid = acquire_lock()
 
-    if not acquire_lock():
-        # Already running — signal it to close (toggle off)
-        signal_existing()
+    if existing_pid is not None:
+        try:
+            os.kill(existing_pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+        try:
+            os.unlink(LOCK_FILE)
+        except OSError:
+            pass
         sys.exit(0)
 
-    # First instance — show the popup
     BrightnessPopup()
     Gtk.main()
 
-    # Clean up lock on exit
     try:
         os.unlink(LOCK_FILE)
     except OSError:
