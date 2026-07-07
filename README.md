@@ -1,6 +1,6 @@
 # Brightness Popup
 
-A gamma-corrected brightness slider for Linux laptops — toggle with a single keyboard shortcut. No daemon, no settings UI, no GNOME version lock. One hotkey, one sliding window, done.
+A gamma-corrected brightness slider for **Intel-based Linux laptops** — toggle with a single keyboard shortcut. No daemon, no settings UI, no GNOME version lock. One hotkey, one sliding window, done.
 
 ```
 Super+B → slide or tap a preset → Esc (or Super+B again) → gone
@@ -20,7 +20,7 @@ chmod +x ~/.local/bin/brightness ~/.local/bin/brightness-indicator
 # 3. Install requirements (Ubuntu/Debian/Pop)
 sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1
 
-# 4. Make the backlight file writable
+# 4. Make the backlight file writable (Intel graphics)
 sudo chmod o+w /sys/class/backlight/intel_backlight/brightness
 
 # 5. Bind the keyboard shortcut (GNOME)
@@ -43,7 +43,7 @@ That's it. Press **Super+B** to open the slider, drag it, and press again (or Es
 
 Backlight values are linear. Human perception is logarithmic. A normal slider dedicates 80% of its travel to the last 20% of perceivable brightness — meaning you breathe on it and the screen goes dark. This popup applies a **power-law curve** so the slider feels like it should: slide to halfway and it's *half as bright*, not almost black.
 
-The slider ranges from **-40** to **100**:
+The slider ranges from **-40** to **100**. It writes directly to `/sys/class/backlight/intel_backlight/brightness` — the standard Intel graphics backlight interface on most modern Linux laptops.
 
 | Slider | Hardware | Feel |
 |--------|----------|------|
@@ -66,6 +66,10 @@ The negative range lets you descend into darkness in tiny, deliberate steps — 
 | `brightness` | The hotkey popup — frameless GTK3 window, runs on Super+B |
 | `brightness-indicator` | Optional tray icon with the same slider |
 | `brightness-indicator.desktop` | Autostart entry for the tray version |
+
+## Compatibility
+
+Built for **Intel graphics laptops** with `/sys/class/backlight/intel_backlight/brightness`. Works on GNOME (Wayland & X11) — Ubuntu, Debian, Pop!_OS, Fedora. If your laptop uses a different backlight path (e.g. `amd_backlight`, `nvidia_0`), you'll need to modify the script or symlink the path.
 
 ## Tray indicator (optional)
 
