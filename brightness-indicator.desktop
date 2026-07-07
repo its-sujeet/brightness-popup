@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Brightness Panel Indicator
+Comment=Tray icon with gamma-corrected brightness slider
+Exec=/home/anon/.local/bin/brightness-indicator
+Icon=display-brightness-symbolic
+Terminal=false
+Categories=GTK;Utility;Hardware;
+StartupNotify=false
