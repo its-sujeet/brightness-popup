@@ -20,8 +20,12 @@ chmod +x ~/.local/bin/brightness ~/.local/bin/brightness-indicator
 # 3. Install requirements (Ubuntu/Debian/Pop)
 sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1
 
-# 4. Make the backlight file writable (Intel graphics)
-sudo chmod o+w /sys/class/backlight/intel_backlight/brightness
+# 4. Make the backlight file writable (Intel graphics, persists across reboots)
+sudo tee /etc/udev/rules.d/90-backlight.rules << 'EOF'
+ACTION=="add", SUBSYSTEM=="backlight", KERNEL=="intel_backlight", RUN+="/bin/chmod o+w /sys/class/backlight/intel_backlight/brightness"
+EOF
+sudo udevadm control --reload-rules
+sudo udevadm trigger --sysname=intel_backlight
 
 # 5. Bind the keyboard shortcut (GNOME)
 gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings \
